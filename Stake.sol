@@ -9,10 +9,12 @@ contract Stake {
     IERC20 public rewardToken;
     IERC20 public depositToken;
 
-    address[] public stakers;
-    mapping(address => uint256) public stakingBalance;
-    mapping(address => bool) public hasStaked;
-    mapping(address => bool) public isStaking;
+    uint256 public TOTAL_STAKED;
+    uint256 public YIELD_TOTAL;
+
+    mapping(address => uint256) public USER_STAKED;
+    mapping(address => uint256) public depositTime;
+    mapping(address => uint256) internal rewards;
 
     constructor(address _depositToken, address _rewardToken) {
         depositToken = IERC20(_depositToken);
@@ -20,40 +22,53 @@ contract Stake {
         owner = msg.sender;
     }
 
+    function setYield(uint256 _YIELD_TOTAL) {
+        require(msg.sender == owner, "Only owner can set total yield");
+        YIELD_TOTAL = _YIELD_TOTAL;
+    }
+
     function stakeTokens(uint256 _amount) public {
         require(_amount > 0, "amount can't be 0");
         depositToken.transferFrom(msg.sender, address(this), _amount);
 
-        stakingBalance[msg.sender] = stakingBalance[msg.sender] + _amount;
+        USER_STAKED[msg.sender] += _amount;
+        TOTAL_STAKED += _amount;
 
-        if (!hasStaked[msg.sender]) {
-            stakers.push(msg.sender);
-        }
-        // Update staking status
-        isStaking[msg.sender] = true;
-        hasStaked[msg.sender] = true;
+        // block time when deposit happened
+        depositTime[msg.sender] = block.timestamp;
     }
 
-    function unstakeTokens() public {
-        uint256 amountStaked = stakingBalance[msg.sender];
-        require(amountStaked > 0, "staking balance cannot be 0");
+    function unstakeTokens(uint256 _amount) public {
+        require(USER_STAKED[msg.sender] > 0, "staking balance cannot be 0");
 
-        depositToken.transfer(msg.sender, amountStaked);
+        depositToken.transfer(msg.sender, _amount);
 
-        // Update staking status + reset balance
-        stakingBalance[msg.sender] = 0;
-        isStaking[msg.sender] = false;
+        // Update staking status and user's staking balance
+        USER_STAKED[msg.sender] -= _amount;
+        TOTAL_STAKED -= _amount;
     }
 
-    function distributeRewards() public {
-        require(msg.sender == owner, "caller must be the owner");
+    function calculateMontlyReward() public returns (uint256) {
+        rewards[msg.sender] =
+            (YIELD_TOTAL * USER_STAKED[msg.sender]) /
+            TOTAL_STAKED;
 
-        for (uint256 i = 0; i < stakers.length; i++) {
-            address recipient = stakers[i];
-            uint256 balance = stakingBalance[recipient];
-            if (balance > 0) {
-                rewardToken.transfer(recipient, balance);
-            }
+        return rewards[msg.sender];
+    }
+
+    function withdrawRewards() public {
+        uint256 lockupTime = depositTime[msg.sender] + 30 days;
+        require(block.timestamp >= lockupTime, "Can't claim rewards");
+
+        uint256 earnedRewards = calculateMontlyReward();
+
+        if (earnedRewards > 0) {
+            rewardToken.transfer(msg.sender, earnedRewards);
         }
+
+        rewards[msg.sender] = 0;
+
+        // renew lockup period for claimer
+        depositTime[msg.sender] = block.timestamp;
     }
 }
